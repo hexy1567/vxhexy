@@ -2,10 +2,6 @@ if not game:IsLoaded() then
 	game.Loaded:Wait()
 end
 
--- // Benzersiz Oturum
-getgenv().MM2FarmSession = tick()
-local mySession = getgenv().MM2FarmSession
-
 -- // Servisler
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -18,6 +14,13 @@ local LocalizationService = game:GetService("LocalizationService")
 local GuiService = game:GetService("GuiService")
 local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
+
+-- // Çoklu Roblox pencereleri için oturum izolasyonu
+-- Her oyuncu + oyun sunucusu kendi oturum anahtarını kullanır.
+local sessionServerId = (game.JobId ~= "" and game.JobId) or "local"
+local sessionKey = "HEXY_MM2FarmSession_" .. tostring(LocalPlayer.UserId) .. "_" .. tostring(game.PlaceId) .. "_" .. tostring(sessionServerId)
+local mySession = HttpService:GenerateGUID(false)
+getgenv()[sessionKey] = mySession
 
 -- // Eski GUI Temizliği
 for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui"}) do
@@ -47,6 +50,7 @@ local translations = {
 		speed = "Farm Hızı",
 		warning = "25+ = Atılma Riski",
 		autoReset = "Oto Reset (Çanta Dolunca)",
+		autoSave = "AutoSave - Ayarları Otomatik Kaydet",
 		underground = "Yeraltı Modu",
 		antiAfk = "Anti-AFK",
 		noclip = "Noclip",
@@ -77,6 +81,7 @@ local translations = {
 		speed = "Farm Speed",
 		warning = "25+ = Kick Risk",
 		autoReset = "Auto Reset (Bag Full)",
+		autoSave = "AutoSave - Save Settings Automatically",
 		underground = "Underground Mode",
 		antiAfk = "Anti-AFK",
 		noclip = "Noclip",
@@ -120,6 +125,9 @@ local bag_full = false
 local isDead = false
 local roundActive = false
 local safeUndergroundActive = false
+local safeUndergroundTarget = nil
+local autoSaveEnabled = true
+local savedToggleStates = {}
 local start_position
 local farmSpeed = 20
 local autoResetEnabled = false
@@ -143,6 +151,111 @@ local theme = {
 
 local themeElements = {}
 
+-- // AutoSave: bütün Roblox hesaplarında aynı ayar dosyası kullanılır.
+-- Böylece bir hesapta kaydedilen ayarlar, aynı executor dosya alanını kullanan
+-- diğer Roblox pencerelerinde de script ilk açıldığında yüklenebilir.
+local CONFIG_FILE = "HEXY_MM2_Farm_Settings.json"
+local SETTINGS_CACHE_KEY = "HEXYMM2FarmSettings_Shared"
+
+local function colorToArray(color)
+	return {
+		math.floor(color.R * 255 + 0.5),
+		math.floor(color.G * 255 + 0.5),
+		math.floor(color.B * 255 + 0.5)
+	}
+end
+
+local function arrayToColor(value, fallback)
+	if type(value) == "table" then
+		local r, g, b = tonumber(value[1]), tonumber(value[2]), tonumber(value[3])
+		if r and g and b then
+			return Color3.fromRGB(math.clamp(r, 0, 255), math.clamp(g, 0, 255), math.clamp(b, 0, 255))
+		end
+	end
+	return fallback
+end
+
+local function loadSettings()
+	local data = nil
+	if type(readfile) == "function" then
+		local ok, raw = pcall(function()
+			return readfile(CONFIG_FILE)
+		end)
+		if ok and type(raw) == "string" and raw ~= "" then
+			local decoded, parsed = pcall(function()
+				return HttpService:JSONDecode(raw)
+			end)
+			if decoded and type(parsed) == "table" then data = parsed end
+		end
+	end
+	-- Same-session fallback when an executor does not provide readfile/writefile.
+	if not data then
+		pcall(function()
+			local cached = getgenv()[SETTINGS_CACHE_KEY]
+			if type(cached) == "table" then data = cached end
+		end)
+	end
+	if not data then
+		savedToggleStates.AutoSave = autoSaveEnabled
+		return
+	end
+
+	if type(data.toggles) == "table" then
+		for name, state in pairs(data.toggles) do
+			if type(name) == "string" and type(state) == "boolean" then
+				savedToggleStates[name] = state
+			end
+		end
+	end
+	autoSaveEnabled = data.autoSaveEnabled ~= false
+	savedToggleStates.AutoSave = autoSaveEnabled
+	farmSpeed = math.clamp(tonumber(data.farmSpeed) or farmSpeed, 1, 50)
+	autoFarmEnabled = savedToggleStates.AutoFarm == true
+	undergroundMode = savedToggleStates.Underground == true
+	autoResetEnabled = savedToggleStates.AutoReset == true
+	if type(data.theme) == "table" then
+		theme.bg = arrayToColor(data.theme.bg, theme.bg)
+		theme.bgLight = arrayToColor(data.theme.bgLight, theme.bgLight)
+		theme.bgLighter = arrayToColor(data.theme.bgLighter, theme.bgLighter)
+		theme.border = arrayToColor(data.theme.border, theme.border)
+		theme.accent = arrayToColor(data.theme.accent, theme.accent)
+		theme.transparency = math.clamp(tonumber(data.theme.transparency) or theme.transparency, 0, 1)
+	end
+end
+
+local function saveSettings(force)
+	if not force and not autoSaveEnabled then return false end
+	local data = {
+		version = 1,
+		autoSaveEnabled = autoSaveEnabled,
+		toggles = savedToggleStates,
+		farmSpeed = farmSpeed,
+		theme = {
+			bg = colorToArray(theme.bg),
+			bgLight = colorToArray(theme.bgLight),
+			bgLighter = colorToArray(theme.bgLighter),
+			border = colorToArray(theme.border),
+			accent = colorToArray(theme.accent),
+			transparency = theme.transparency
+		}
+	}
+	-- Cache in the executor environment as a fallback, then persist to disk when supported.
+	pcall(function() getgenv()[SETTINGS_CACHE_KEY] = data end)
+	if type(writefile) ~= "function" then return false end
+	local ok = pcall(function()
+		writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+	end)
+	return ok
+end
+loadSettings()
+
+task.spawn(function()
+	while task.wait(4) do
+		if getgenv()[sessionKey] ~= mySession then break end
+		if autoSaveEnabled then saveSettings(false) end
+	end
+end)
+
 -- ============================================================
 -- KARAKTER STABİLİZASYON SİSTEMİ
 -- ============================================================
@@ -156,12 +269,70 @@ local function getHumanoid()
 	return char and char:FindFirstChildOfClass("Humanoid")
 end
 
+local originalCollision = {}
+local function disableCharacterCollisions(char)
+	if not char then return end
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			if originalCollision[part] == nil then
+				originalCollision[part] = part.CanCollide
+			end
+			part.CanCollide = false
+		end
+	end
+end
+
+local function restoreCharacterCollisions()
+	for part, oldValue in pairs(originalCollision) do
+		if part and part.Parent then
+			pcall(function() part.CanCollide = oldValue end)
+		end
+		originalCollision[part] = nil
+	end
+end
+
+local function zeroCharacterVelocity(hrp, char)
+	if hrp and hrp.Parent then
+		hrp.AssemblyLinearVelocity = Vector3.zero
+		hrp.AssemblyAngularVelocity = Vector3.zero
+		pcall(function() hrp.Velocity = Vector3.zero end)
+		pcall(function() hrp.RotVelocity = Vector3.zero end)
+	end
+	if char then
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.AssemblyLinearVelocity = Vector3.zero
+				part.AssemblyAngularVelocity = Vector3.zero
+			end
+		end
+	end
+end
+
 local function stabilizeCharacter()
 	local char = LocalPlayer.Character
 	if not char then return end
 	local hrp = getHRP()
 	local hum = getHumanoid()
 	if not hrp or not hum then return end
+
+	-- While waiting AFK during a round, keep the character below its recorded spawn.
+	-- Reapply the position each heartbeat in case the client/server corrects it.
+	if safeUndergroundActive and safeUndergroundTarget then
+		disableCharacterCollisions(char)
+		hrp.Anchored = true
+		hrp.CFrame = safeUndergroundTarget
+		zeroCharacterVelocity(hrp, char)
+		hum.AutoRotate = false
+		hum.WalkSpeed = 0
+		hum.JumpPower = 0
+		hum.PlatformStand = true
+		hum.Sit = false
+		local camera = Workspace.CurrentCamera
+		if camera and camera.CameraSubject ~= hum then camera.CameraSubject = hum end
+		return
+	end
+
+	if safeUndergroundActive then disableCharacterCollisions(char) end
 	
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
@@ -201,7 +372,7 @@ end
 local function startStabilization()
 	if stabilizeConnection then return end
 	stabilizeConnection = RunService.Heartbeat:Connect(function()
-		if getgenv().MM2FarmSession ~= mySession then
+		if getgenv()[sessionKey] ~= mySession then
 			stabilizeConnection:Disconnect()
 			stabilizeConnection = nil
 			return
@@ -554,12 +725,16 @@ local function createToggle(parent, name, text, callback)
 	Btn.BackgroundTransparency = 1
 	Btn.Text = ""
 	
-	local state = false
+	local state = savedToggleStates[name] == true
 	toggles[name] = state
-	
+	SwitchBg.BackgroundColor3 = state and theme.accent or Color3.fromRGB(55, 55, 65)
+	SwitchCircle.Position = state and UDim2.new(0, 20, 0, 2) or UDim2.new(0, 2, 0, 2)
+	TText.TextColor3 = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 180, 180)
+
 	Btn.MouseButton1Click:Connect(function()
 		state = not state
 		toggles[name] = state
+		savedToggleStates[name] = state
 		
 		local goalBg = state and theme.accent or Color3.fromRGB(55, 55, 65)
 		local goalPos = state and UDim2.new(0, 20, 0, 2) or UDim2.new(0, 2, 0, 2)
@@ -569,8 +744,16 @@ local function createToggle(parent, name, text, callback)
 		TText.TextColor3 = state and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(180, 180, 180)
 		
 		if callback then callback(state) end
+		saveSettings(name == "AutoSave")
 	end)
-	
+
+	if state and callback then
+		task.defer(function()
+			if getgenv()[sessionKey] == mySession and TFrame.Parent then
+				pcall(callback, state)
+			end
+		end)
+	end
 	return TFrame
 end
 
@@ -696,6 +879,7 @@ local function createColorPicker(parent, labelText, colorKey, defaultColor)
 		preview.BackgroundColor3 = newColor
 		theme[colorKey] = newColor
 		applyTheme()
+		saveSettings()
 	end)
 	
 	return frame
@@ -730,6 +914,7 @@ local function createPresetBtn(parent, text, presetData, xPos, yPos)
 		theme.border = presetData.border
 		theme.accent = presetData.accent
 		applyTheme()
+		saveSettings()
 	end)
 	
 	return btn
@@ -740,12 +925,37 @@ end
 -- ============================================================
 createToggle(MainContent, "AutoFarm", L("autoFarm"), function(state)
 	autoFarmEnabled = state
-	-- Auto Farm düğmesi lobide karakteri hareket ettirmez veya sabitlemez.
-	farming = state and roundActive and not isDead and not bag_full
-	if state and roundActive then
-		startStabilization()
-	elseif not noclipEnabled and not safeUndergroundActive then
-		stopStabilization()
+	if state then
+		-- AFK güvenli konumundan çıkar ve farmı başlat.
+		if safeUndergroundActive then
+			local hrp = getHRP()
+			if hrp then hrp.Anchored = false end
+			safeUndergroundActive = false
+			restoreCharacterCollisions()
+		end
+		farming = roundActive and not isDead and not bag_full
+		if roundActive then
+			startStabilization()
+		elseif not noclipEnabled then
+			stopStabilization()
+		end
+	else
+		farming = false
+		-- AutoFarm kapatılırsa tur içindeyken tekrar güvenli AFK noktasına dön.
+		if roundActive and not isDead and safeUndergroundTarget then
+			safeUndergroundActive = true
+			local hrp = getHRP()
+			local char = LocalPlayer.Character
+			if hrp then
+				disableCharacterCollisions(char)
+				hrp.CFrame = safeUndergroundTarget
+				hrp.Anchored = true
+				zeroCharacterVelocity(hrp, char)
+			end
+			startStabilization()
+		elseif not noclipEnabled and not safeUndergroundActive then
+			stopStabilization()
+		end
 	end
 end)
 
@@ -762,6 +972,7 @@ local speedInputFrame, speedBox = createInput(MainContent, L("speed"), tostring(
 	if num then
 		farmSpeed = math.clamp(num, 1, 50)
 		speedBox.Text = tostring(farmSpeed)
+		saveSettings()
 	end
 end)
 
@@ -777,6 +988,28 @@ WarningLabel.TextXAlignment = Enum.TextXAlignment.Center
 -- ============================================================
 -- DİĞER SAYFA ELEMANLARI
 -- ============================================================
+createToggle(MiscContent, "AutoSave", L("autoSave"), function(state)
+	autoSaveEnabled = state
+	savedToggleStates.AutoSave = state
+	-- Write immediately when toggled, including when the user turns AutoSave off.
+	saveSettings(true)
+end)
+
+local AutoSaveInfo = Instance.new("TextLabel", MiscContent)
+AutoSaveInfo.Size = UDim2.new(1, -12, 0, 30)
+AutoSaveInfo.BackgroundTransparency = 1
+AutoSaveInfo.Font = Enum.Font.Gotham
+AutoSaveInfo.TextSize = 10
+AutoSaveInfo.TextWrapped = true
+AutoSaveInfo.TextXAlignment = Enum.TextXAlignment.Left
+AutoSaveInfo.TextYAlignment = Enum.TextYAlignment.Center
+AutoSaveInfo.TextColor3 = theme.textDim
+if type(readfile) == "function" and type(writefile) == "function" then
+	AutoSaveInfo.Text = "Kalıcı AutoSave hazır: HEXY_MM2_Farm_Settings.json"
+else
+	AutoSaveInfo.Text = "Kalıcı kayıt için executor readfile/writefile desteği gerekir."
+end
+
 createToggle(MiscContent, "AntiAFK", L("antiAfk"), function(state)
 	if state then
 		pcall(function()
@@ -790,7 +1023,7 @@ createToggle(MiscContent, "Noclip", L("noclip"), function(state)
 	if state then
 		startStabilization()
 		noclipConnection = RunService.Stepped:Connect(function()
-			if getgenv().MM2FarmSession ~= mySession then return end
+			if getgenv()[sessionKey] ~= mySession then return end
 			local char = LocalPlayer.Character
 			if char then
 				for _, part in pairs(char:GetDescendants()) do
@@ -813,6 +1046,7 @@ end)
 
 createInput(MiscContent, L("webhookPlaceholder"), webhookURL, function(val)
 	webhookURL = val
+	saveSettings()
 end)
 
 local WebhookTimerLabel = Instance.new("TextLabel", MiscContent)
@@ -915,6 +1149,7 @@ end)
 UserInputService.InputEnded:Connect(function(input)
 	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 		draggingSlider = false
+		saveSettings()
 	end
 end)
 
@@ -1031,7 +1266,7 @@ LangStatus.TextXAlignment = Enum.TextXAlignment.Right
 -- ============================================================
 task.spawn(function()
 	while task.wait(1) do
-		if getgenv().MM2FarmSession ~= mySession then break end
+		if getgenv()[sessionKey] ~= mySession then break end
 		local diff = os.difftime(os.time(), startTime)
 		local h = math.floor(diff / 3600)
 		local m = math.floor((diff % 3600) / 60)
@@ -1081,7 +1316,7 @@ local collectedCoins = {}
 local COIN_COOLDOWN = 3
 
 local function isCoinValid(coin)
-	if getgenv().MM2FarmSession ~= mySession then return false end
+	if getgenv()[sessionKey] ~= mySession then return false end
 	if not coin or not coin.Parent then return false end
 	if not coin:FindFirstChild("TouchInterest") then return false end
 	if collectedCoins[coin] then
@@ -1099,7 +1334,7 @@ local function get_nearest_coin()
 	if not hrp then return nil, math.huge end
 	local closest, dist = nil, math.huge
 	for _, m in pairs(workspace:GetChildren()) do
-		if getgenv().MM2FarmSession ~= mySession then return nil, math.huge end
+		if getgenv()[sessionKey] ~= mySession then return nil, math.huge end
 		if m:FindFirstChild("CoinContainer") then
 			for _, coin in pairs(m.CoinContainer:GetChildren()) do
 				if coin:IsA("BasePart") and isCoinValid(coin) then
@@ -1159,59 +1394,176 @@ local RoundStart = ReplicatedStorage.Remotes.Gameplay.RoundStart
 local RoundEnd = ReplicatedStorage.Remotes.Gameplay.RoundEndFade
 local CoinCollected = ReplicatedStorage.Remotes.Gameplay.CoinCollected
 
-RoundStart.OnClientEvent:Connect(function()
-	if getgenv().MM2FarmSession ~= mySession then return end
+local function hasRoundCoinContainer()
+	-- MM2 can place CoinContainer at different depths depending on the current map.
+	return Workspace:FindFirstChild("CoinContainer", true) ~= nil
+end
+
+local safeMoveToken = 0
+local function enterSafeUnderground()
+	safeMoveToken += 1
+	local myMoveToken = safeMoveToken
+	safeUndergroundActive = true
+	farming = false -- finish the safety move before allowing farming
+	startStabilization()
+
+	task.spawn(function()
+		-- RoundStart may arrive just before or just after the map teleport.
+		-- Prefer an actual spawn movement; if none occurs, wait briefly for the map to settle.
+		local hrp = getHRP()
+		local initialPosition = hrp and hrp.Position or nil
+		local waitStarted = os.clock()
+		for _ = 1, 60 do
+			if getgenv()[sessionKey] ~= mySession or myMoveToken ~= safeMoveToken or not roundActive or isDead then return end
+			local charNow = LocalPlayer.Character
+			hrp = charNow and charNow:FindFirstChild("HumanoidRootPart")
+			if hrp and not initialPosition then initialPosition = hrp.Position end
+			local elapsed = os.clock() - waitStarted
+			local movedToSpawn = hrp and initialPosition and (hrp.Position - initialPosition).Magnitude > 8
+			if movedToSpawn then break end
+			if elapsed >= 1.5 and hasRoundCoinContainer() then break end
+			task.wait(0.1)
+		end
+
+		if getgenv()[sessionKey] ~= mySession or myMoveToken ~= safeMoveToken or not roundActive or isDead then return end
+		local char = LocalPlayer.Character
+		hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp or not hrp.Parent or not char then
+			safeUndergroundActive = false
+			if not noclipEnabled then stopStabilization() end
+			return
+		end
+
+		-- Save the map spawn (after the map has had time to teleport the character),
+		-- then set the AFK position below the floor.
+		start_position = hrp.CFrame
+		safeUndergroundTarget = start_position + Vector3.new(0, -28, 0)
+		local target = safeUndergroundTarget
+		for _ = 1, 12 do
+			if getgenv()[sessionKey] ~= mySession or myMoveToken ~= safeMoveToken or not roundActive or isDead then return end
+			char = LocalPlayer.Character
+			hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not hrp or not hrp.Parent or not char then break end
+			disableCharacterCollisions(char)
+			hrp.CFrame = target
+			hrp.Anchored = true
+			zeroCharacterVelocity(hrp, char)
+			task.wait(0.05)
+		end
+
+		if getgenv()[sessionKey] ~= mySession or myMoveToken ~= safeMoveToken or not roundActive or isDead then return end
+		if autoFarmEnabled and not bag_full then
+			-- Safety move complete: release the character and start the farm only now.
+			hrp = getHRP()
+			if hrp then hrp.Anchored = false end
+			safeUndergroundActive = false
+			restoreCharacterCollisions()
+			farming = true
+			startStabilization()
+		else
+			-- AutoFarm is off: leave the character anchored under the map until enabled/end of round.
+			local currentHRP = getHRP()
+			if currentHRP then
+				disableCharacterCollisions(LocalPlayer.Character)
+				currentHRP.CFrame = target
+				currentHRP.Anchored = true
+				zeroCharacterVelocity(currentHRP, LocalPlayer.Character)
+			end
+			farming = false
+		end
+	end)
+end
+
+local function beginRound()
+	if getgenv()[sessionKey] ~= mySession or roundActive then return end
 	roundActive = true
 	isDead = false
 	bag_full = false
-	farming = autoFarmEnabled
+	farming = false
 	collectedCoins = {}
-	local hrp = getHRP()
-	if hrp then
-		-- Save the actual spawn so RoundEnd can restore it.
-		start_position = hrp.CFrame
-		-- Move below the spawn immediately, even before AutoFarm starts, to reduce AFK exposure.
-		safeUndergroundActive = true
-		hrp.CFrame = start_position * CFrame.new(0, -10, 0)
-		hrp.AssemblyLinearVelocity = Vector3.zero
-		hrp.AssemblyAngularVelocity = Vector3.zero
-		hrp.Velocity = Vector3.zero
-		hrp.RotVelocity = Vector3.zero
-	else
-		safeUndergroundActive = true
+	enterSafeUnderground()
+end
+
+RoundStart.OnClientEvent:Connect(beginRound)
+
+-- Fallback in case RoundStart fires before this script connects or is missed.
+task.spawn(function()
+	while task.wait(0.25) do
+		if getgenv()[sessionKey] ~= mySession then break end
+		if not roundActive and hasRoundCoinContainer() then
+			beginRound()
+		end
 	end
-	-- Keep the character steady underground while waiting for AutoFarm or during AFK.
-	startStabilization()
 end)
 
 RoundEnd.OnClientEvent:Connect(function()
-	if getgenv().MM2FarmSession ~= mySession then return end
+	if getgenv()[sessionKey] ~= mySession then return end
+	safeMoveToken += 1
 	roundActive = false
 	farming = false
 	safeUndergroundActive = false
 	local hrp = getHRP()
-	if start_position and hrp then hrp.CFrame = start_position end
+	if hrp then
+		hrp.Anchored = false
+		if start_position then hrp.CFrame = start_position end
+	end
+	safeUndergroundTarget = nil
+	restoreCharacterCollisions()
 	if not noclipEnabled then stopStabilization() end
 end)
 
 LocalPlayer.CharacterAdded:Connect(function(newChar)
-	if getgenv().MM2FarmSession ~= mySession then return end
+	if getgenv()[sessionKey] ~= mySession then return end
 	isDead = false
 	farming = false
 	bag_full = false
-	local hum = newChar:WaitForChild("Humanoid", 3)
+	local hum = newChar:WaitForChild("Humanoid", 5)
 	if hum then
 		hum.Died:Connect(function()
+			safeMoveToken += 1
 			isDead = true
 			farming = false
 			bag_full = false
 			safeUndergroundActive = false
+			local deadHRP = getHRP()
+			if deadHRP then deadHRP.Anchored = false end
+			safeUndergroundTarget = nil
+			restoreCharacterCollisions()
+			if not noclipEnabled then stopStabilization() end
+		end)
+	end
+	-- In case CharacterAdded arrives after RoundStart, retry the safe move.
+	if roundActive then
+		task.delay(0.15, function()
+			if getgenv()[sessionKey] == mySession and roundActive and not isDead then
+				enterSafeUnderground()
+			end
 		end)
 	end
 end)
 
+local function hookCurrentCharacterDeath()
+	local char = LocalPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum.Died:Connect(function()
+			safeMoveToken += 1
+			isDead = true
+			farming = false
+			bag_full = false
+			safeUndergroundActive = false
+			local deadHRP = getHRP()
+			if deadHRP then deadHRP.Anchored = false end
+			safeUndergroundTarget = nil
+			restoreCharacterCollisions()
+			if not noclipEnabled then stopStabilization() end
+		end)
+	end
+end
+hookCurrentCharacterDeath()
+
 CoinCollected.OnClientEvent:Connect(function(_, current, max)
-	if getgenv().MM2FarmSession ~= mySession then return end
+	if getgenv()[sessionKey] ~= mySession then return end
 	totalCoins = totalCoins + 1
 	
 	if current >= max then
@@ -1241,7 +1593,7 @@ CoinCollected.OnClientEvent:Connect(function(_, current, max)
 end)
 
 local function tweenTo(hrp, targetPos)
-	if getgenv().MM2FarmSession ~= mySession or not hrp or not hrp.Parent or bag_full or not roundActive then return false end
+	if getgenv()[sessionKey] ~= mySession or not hrp or not hrp.Parent or bag_full or not roundActive then return false end
 	
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
@@ -1256,7 +1608,7 @@ local function tweenTo(hrp, targetPos)
 	tween:Play()
 	
 	while tween.PlaybackState == Enum.PlaybackState.Playing do
-		if getgenv().MM2FarmSession ~= mySession or not roundActive or not hrp or not hrp.Parent or bag_full then
+		if getgenv()[sessionKey] ~= mySession or not roundActive or not hrp or not hrp.Parent or bag_full then
 			tween:Cancel()
 			return false
 		end
@@ -1273,7 +1625,7 @@ end
 task.spawn(function()
 	while true do
 		task.wait(0.03)
-		if getgenv().MM2FarmSession ~= mySession then break end
+		if getgenv()[sessionKey] ~= mySession then break end
 		if autoFarmEnabled and farming and not bag_full and not isDead and roundActive then
 			local hrp = getHRP()
 			if hrp and hrp.Parent then
@@ -1369,12 +1721,12 @@ end)
 task.spawn(function()
 	while true do
 		task.wait(0.1)
-		if getgenv().MM2FarmSession ~= mySession then break end
+		if getgenv()[sessionKey] ~= mySession then break end
 		if isVisible then
 			local t1 = TweenService:Create(BtnStroke, TweenInfo.new(0.4), {Color = Color3.fromRGB(200, 200, 255), Transparency = 0})
 			t1:Play()
 			t1.Completed:Wait()
-			if getgenv().MM2FarmSession ~= mySession or not isVisible then break end
+			if getgenv()[sessionKey] ~= mySession or not isVisible then break end
 			local t2 = TweenService:Create(BtnStroke, TweenInfo.new(0.4), {Color = Color3.fromRGB(80, 80, 90), Transparency = 0.4})
 			t2:Play()
 			t2.Completed:Wait()
