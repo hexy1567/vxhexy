@@ -15,6 +15,27 @@ local GuiService = game:GetService("GuiService")
 local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
 
+-- Stop legacy HEXY versions that used the old global session token.
+pcall(function() getgenv().MM2FarmSession = HttpService:GenerateGUID(false) end)
+
+-- Remove the old third-party Anti-AFK overlay when present.
+local function removeOldAntiAfkOverlay(root)
+	pcall(function()
+		for _, obj in ipairs(root:GetDescendants()) do
+			if obj:IsA("TextLabel") or obj:IsA("TextButton") then
+				local label = string.lower(obj.Text or "")
+				if label:find("anti%-afk") and label:find(string.char(118, 111, 105, 100), 1, true) then
+					local gui = obj:FindFirstAncestorOfClass("ScreenGui")
+					if gui then gui:Destroy() end
+					break
+				end
+			end
+		end
+	end)
+end
+removeOldAntiAfkOverlay(CoreGui)
+pcall(function() removeOldAntiAfkOverlay(LocalPlayer:WaitForChild("PlayerGui", 5)) end)
+
 -- // Çoklu Roblox pencereleri için oturum izolasyonu
 -- Her oyuncu + oyun sunucusu kendi oturum anahtarını kullanır.
 local sessionServerId = (game.JobId ~= "" and game.JobId) or "local"
@@ -136,6 +157,7 @@ local undergroundMode = false
 local noclipEnabled = false
 local noclipConnection = nil
 local stabilizeConnection = nil
+local antiAfkConnection = nil
 
 -- // Tema Değişkenleri
 local theme = {
@@ -315,9 +337,10 @@ local function stabilizeCharacter()
 	local hum = getHumanoid()
 	if not hrp or not hum then return end
 
-	-- While waiting AFK during a round, keep the character below its recorded spawn.
-	-- Reapply the position each heartbeat in case the client/server corrects it.
-	if safeUndergroundActive and safeUndergroundTarget then
+	-- While round start is settling, do not freeze the character before the server finishes spawning it.
+	if safeUndergroundActive then
+		if not safeUndergroundTarget then return end
+		-- Once the target is ready, hold position below the recorded spawn.
 		disableCharacterCollisions(char)
 		hrp.Anchored = true
 		hrp.CFrame = safeUndergroundTarget
@@ -331,8 +354,6 @@ local function stabilizeCharacter()
 		if camera and camera.CameraSubject ~= hum then camera.CameraSubject = hum end
 		return
 	end
-
-	if safeUndergroundActive then disableCharacterCollisions(char) end
 	
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
@@ -1020,11 +1041,21 @@ else
 end
 
 createToggle(MiscContent, "AntiAFK", L("antiAfk"), function(state)
+	-- Local Anti-AFK only; does not download or execute remote code.
+	if antiAfkConnection then
+		antiAfkConnection:Disconnect()
+		antiAfkConnection = nil
+	end
 	if state then
-		pcall(function()
-			loadstring(game:HttpGet("https://raw.githubusercontent.com/nahsqn/scripts/refs/heads/main/antiafk"))()
+		antiAfkConnection = LocalPlayer.Idled:Connect(function()
+			pcall(function()
+				local VirtualUser = game:GetService("VirtualUser")
+				VirtualUser:CaptureController()
+				VirtualUser:ClickButton2(Vector2.new(0, 0))
+			end)
 		end)
 	end
+	saveSettings()
 end)
 
 createToggle(MiscContent, "Noclip", L("noclip"), function(state)
@@ -1403,16 +1434,12 @@ local RoundStart = ReplicatedStorage.Remotes.Gameplay.RoundStart
 local RoundEnd = ReplicatedStorage.Remotes.Gameplay.RoundEndFade
 local CoinCollected = ReplicatedStorage.Remotes.Gameplay.CoinCollected
 
-local function hasRoundCoinContainer()
-	-- MM2 can place CoinContainer at different depths depending on the current map.
-	return Workspace:FindFirstChild("CoinContainer", true) ~= nil
-end
-
 local safeMoveToken = 0
 local function enterSafeUnderground()
 	safeMoveToken += 1
 	local myMoveToken = safeMoveToken
 	safeUndergroundActive = true
+	safeUndergroundTarget = nil -- never reuse a stale target from a previous round
 	farming = false -- finish the safety move before allowing farming
 	startStabilization()
 
@@ -1422,17 +1449,24 @@ local function enterSafeUnderground()
 		local hrp = getHRP()
 		local initialPosition = hrp and hrp.Position or nil
 		local waitStarted = os.clock()
-		for _ = 1, 60 do
+		local sawSpawnMovement = false
+		-- Wait for the actual round teleport. CoinContainer can exist before the character is at the map.
+		for _ = 1, 45 do
 			if getgenv()[sessionKey] ~= mySession or myMoveToken ~= safeMoveToken or not roundActive or isDead then return end
 			local charNow = LocalPlayer.Character
 			hrp = charNow and charNow:FindFirstChild("HumanoidRootPart")
 			if hrp and not initialPosition then initialPosition = hrp.Position end
 			local elapsed = os.clock() - waitStarted
 			local movedToSpawn = hrp and initialPosition and (hrp.Position - initialPosition).Magnitude > 8
-			if movedToSpawn then break end
-			if elapsed >= 1.5 and hasRoundCoinContainer() then break end
+			if movedToSpawn then
+				sawSpawnMovement = true
+				break
+			end
+			-- If the event arrived after teleport, use the current location after a short settling delay.
+			if elapsed >= 3.0 then break end
 			task.wait(0.1)
 		end
+		if not sawSpawnMovement then task.wait(0.35) end
 
 		if getgenv()[sessionKey] ~= mySession or myMoveToken ~= safeMoveToken or not roundActive or isDead then return end
 		local char = LocalPlayer.Character
