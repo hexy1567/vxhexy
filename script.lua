@@ -12,13 +12,14 @@ local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local LocalizationService = game:GetService("LocalizationService")
 local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
 
 -- // Eski GUI Temizliği
-for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui"}) do
+for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui", "VoidMM2_UI", "VoidIntroGui"}) do
 	local old = CoreGui:FindFirstChild(name)
 	if old then old:Destroy() end
 end
@@ -37,7 +38,7 @@ end)
 
 local translations = {
 	TR = {
-		title = "HEXY | MM2 Farm (Made by HEXY)",
+		title = "HEXY | MM2 Farm",
 		mainTab = "Farm",
 		miscTab = "Ayarlar",
 		themeTab = "Tema",
@@ -49,18 +50,25 @@ local translations = {
 		antiAfk = "Anti-AFK",
 		noclip = "Noclip",
 		webhookPlaceholder = "Discord Webhook URL",
+		webhookTimer = "Webhook: ",
+		coin = "Coin: ",
+		time = "Süre: ",
 		langStatus = "Dil: Türkçe",
 		themeTitle = "Tema Ayarları",
 		bgColor = "Arka Plan Rengi",
 		borderColor = "Kenarlık Rengi",
 		accentColor = "Vurgu Rengi",
+		transparency = "Şeffaflık",
 		presets = "Hazır Temalar",
 		presetDark = "Koyu",
 		presetPurple = "Mor",
-		presetRed = "Kırmızı"
+		presetRed = "Kırmızı",
+		presetBlue = "Mavi",
+		presetGreen = "Yeşil",
+		presetPink = "Pembe"
 	},
 	EN = {
-		title = "HEXY | MM2 Farm (Made by HEXY)",
+		title = "HEXY | MM2 Farm",
 		mainTab = "Farm",
 		miscTab = "Settings",
 		themeTab = "Theme",
@@ -72,15 +80,22 @@ local translations = {
 		antiAfk = "Anti-AFK",
 		noclip = "Noclip",
 		webhookPlaceholder = "Discord Webhook URL",
+		webhookTimer = "Time: ",
+		coin = "Coins: ",
+		time = "Time: ",
 		langStatus = "Lang: English",
 		themeTitle = "Theme Settings",
 		bgColor = "Background Color",
 		borderColor = "Border Color",
 		accentColor = "Accent Color",
+		transparency = "Transparency",
 		presets = "Presets",
 		presetDark = "Dark",
 		presetPurple = "Purple",
-		presetRed = "Red"
+		presetRed = "Red",
+		presetBlue = "Blue",
+		presetGreen = "Green",
+		presetPink = "Pink"
 	}
 }
 
@@ -88,17 +103,16 @@ local function L(key)
 	return translations[currentLang][key] or key
 end
 
--- // Farm & Config Değişkenleri
+-- // İstatistik & Config
 local configFileName = "HexyMM2_Config.json"
+local webhookURL = ""
 local autoFarmEnabled = false
 local farmSpeed = 20
 local autoResetEnabled = false
 local undergroundMode = false
-local antiAfkEnabled = false
 local noclipEnabled = false
-local webhookURL = ""
-
 local noclipConnection = nil
+local stabilizeConnection = nil
 
 -- // Tema Değişkenleri
 local theme = {
@@ -123,13 +137,15 @@ local function saveConfig()
 		FarmSpeed = farmSpeed,
 		AutoReset = autoResetEnabled,
 		Underground = undergroundMode,
-		AntiAFK = antiAfkEnabled,
 		Noclip = noclipEnabled,
 		WebhookURL = webhookURL,
 		Theme = {
 			bgR = theme.bg.R, bgG = theme.bg.G, bgB = theme.bg.B,
+			bgLightR = theme.bgLight.R, bgLightG = theme.bgLight.G, bgLightB = theme.bgLight.B,
+			bgLighterR = theme.bgLighter.R, bgLighterG = theme.bgLighter.G, bgLighterB = theme.bgLighter.B,
 			borderR = theme.border.R, borderG = theme.border.G, borderB = theme.border.B,
-			accentR = theme.accent.R, accentG = theme.accent.G, accentB = theme.accent.B
+			accentR = theme.accent.R, accentG = theme.accent.G, accentB = theme.accent.B,
+			transparency = theme.transparency
 		}
 	}
 	pcall(function()
@@ -154,10 +170,37 @@ end
 -- ============================================================
 -- KARAKTER KONTROLÜ
 -- ============================================================
-local function unStabilizeCharacter()
+local function getHRP()
+	local char = LocalPlayer.Character
+	return char and char:FindFirstChild("HumanoidRootPart")
+end
+
+local function getHumanoid()
+	local char = LocalPlayer.Character
+	return char and char:FindFirstChildOfClass("Humanoid")
+end
+
+local function stabilizeCharacter()
 	local char = LocalPlayer.Character
 	if not char then return end
-	local hum = char:FindFirstChildOfClass("Humanoid")
+	local hrp = getHRP()
+	local hum = getHumanoid()
+	if not hrp or not hum then return end
+	
+	hrp.AssemblyLinearVelocity = Vector3.zero
+	hrp.AssemblyAngularVelocity = Vector3.zero
+	hrp.Velocity = Vector3.zero
+	hrp.RotVelocity = Vector3.zero
+	
+	hum.AutoRotate = false
+	hum.WalkSpeed = 0
+	hum.JumpPower = 0
+	hum.PlatformStand = true
+	hum.Sit = false
+end
+
+local function unStabilizeCharacter()
+	local hum = getHumanoid()
 	if not hum then return end
 	hum.AutoRotate = true
 	hum.WalkSpeed = 16
@@ -165,8 +208,30 @@ local function unStabilizeCharacter()
 	hum.PlatformStand = false
 end
 
+local function startStabilization()
+	if stabilizeConnection then return end
+	stabilizeConnection = RunService.Heartbeat:Connect(function()
+		if getgenv().HEXYFarmSession ~= mySession then
+			stabilizeConnection:Disconnect()
+			stabilizeConnection = nil
+			return
+		end
+		if noclipEnabled or autoFarmEnabled then
+			stabilizeCharacter()
+		end
+	end)
+end
+
+local function stopStabilization()
+	if stabilizeConnection then
+		stabilizeConnection:Disconnect()
+		stabilizeConnection = nil
+	end
+	unStabilizeCharacter()
+end
+
 -- ============================================================
--- OYUN DURUMU & COIN ARAMA (Lobi Filtresi)
+-- OYUN DURUMU & COIN KONTROLÜ (Lobi Filtresi)
 -- ============================================================
 local function getActiveCoinContainer()
 	for _, child in ipairs(Workspace:GetChildren()) do
@@ -192,8 +257,22 @@ local IntroFrame = Instance.new("Frame", IntroGui)
 IntroFrame.BackgroundColor3 = Color3.fromRGB(5, 5, 8)
 IntroFrame.Size = UDim2.new(1, 0, 1, 0)
 IntroFrame.BorderSizePixel = 0
+IntroFrame.ZIndex = 100
 
 local IntroText = Instance.new("TextLabel", IntroFrame)
 IntroText.Size = UDim2.new(1, 0, 1, 0)
 IntroText.BackgroundTransparency = 1
-IntroText.Font = Enum.
+IntroText.Font = Enum.Font.GothamBlack
+IntroText.Text = "HEXY"
+IntroText.TextColor3 = Color3.fromRGB(255, 255, 255)
+IntroText.TextSize = 72
+IntroText.TextTransparency = 1
+IntroText.ZIndex = 101
+
+local IntroGlow = Instance.new("TextLabel", IntroFrame)
+IntroGlow.Size = UDim2.new(1, 0, 1, 0)
+IntroGlow.BackgroundTransparency = 1
+IntroGlow.Font = Enum.Font.GothamBlack
+IntroGlow.Text = "HEXY"
+IntroGlow.TextColor3 = Color3.fromRGB(70, 200, 100)
+IntroGlow.TextSize
