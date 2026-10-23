@@ -44,7 +44,7 @@ local mySession = HttpService:GenerateGUID(false)
 getgenv()[sessionKey] = mySession
 
 -- // Eski GUI Temizliği
-for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui"}) do
+for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui", "HexyToggleGui"}) do
 	local old = CoreGui:FindFirstChild(name)
 	if old then old:Destroy() end
 end
@@ -516,6 +516,8 @@ ScreenGui.ResetOnSpawn = false
 ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = CoreGui
 
+local isVisible = false -- shared visibility state for click-only menu controls
+
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
 MainFrame.Parent = ScreenGui
@@ -580,8 +582,33 @@ LangLabel.Font = Enum.Font.Gotham
 LangLabel.Text = L("langStatus")
 LangLabel.TextColor3 = theme.textDim
 LangLabel.TextSize = 10
+LangLabel.Position = UDim2.new(1, -150, 0, 0)
+LangLabel.Size = UDim2.new(0, 110, 1, 0)
 LangLabel.TextXAlignment = Enum.TextXAlignment.Right
 table.insert(themeElements, {obj = LangLabel, prop = "TextColor3", key = "textDim"})
+
+-- Clickable X button closes the menu without a keyboard shortcut.
+local CloseButton = Instance.new("TextButton")
+CloseButton.Name = "CloseButton"
+CloseButton.Parent = TopBar
+CloseButton.Size = UDim2.new(0, 28, 0, 28)
+CloseButton.Position = UDim2.new(1, -32, 0.5, -14)
+CloseButton.BackgroundColor3 = Color3.fromRGB(55, 35, 40)
+CloseButton.BackgroundTransparency = 0.1
+CloseButton.BorderSizePixel = 0
+CloseButton.Text = "×"
+CloseButton.TextColor3 = Color3.fromRGB(255, 225, 225)
+CloseButton.TextSize = 22
+CloseButton.Font = Enum.Font.GothamBold
+CloseButton.AutoButtonColor = true
+CloseButton.Active = true
+CloseButton.Selectable = true
+CloseButton.ZIndex = 20
+Instance.new("UICorner", CloseButton).CornerRadius = UDim.new(0, 7)
+CloseButton.Activated:Connect(function()
+    isVisible = false
+    MainFrame.Visible = false
+end)
 
 -- Sol Sekme Çubuğu
 local Sidebar = Instance.new("Frame", MainFrame)
@@ -1748,29 +1775,32 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- OYUN TOPBAR BUTONU
+-- DELTA SIMGESININ ALTINDA MENU AC/KAPA BUTONU
 -- ============================================================
-local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-local gameTopbar = playerGui:WaitForChild("GameTopbar")
-local container = gameTopbar:WaitForChild("Container")
+-- Separate CoreGui overlay so the button can sit below Delta's floating icon,
+-- rather than inheriting the game's topbar layout in the upper-right corner.
+local ToggleGui = Instance.new("ScreenGui")
+ToggleGui.Name = "HexyToggleGui"
+ToggleGui.ResetOnSpawn = false
+ToggleGui.IgnoreGuiInset = true
+ToggleGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+ToggleGui.DisplayOrder = 10000
+ToggleGui.Parent = CoreGui
 
-if container:FindFirstChild("MenuToggleButton") then
-	container.MenuToggleButton:Destroy()
-end
-
-local buttonSize = 45
+local buttonSize = 42
 local ToggleButton = Instance.new("TextButton")
 ToggleButton.Name = "MenuToggleButton"
-ToggleButton.Parent = container
+ToggleButton.Parent = ToggleGui
 ToggleButton.Size = UDim2.new(0, buttonSize, 0, buttonSize)
+-- Top-left, a little below the usual Delta floating control.
+ToggleButton.Position = UDim2.new(0, 12, 0, 76)
 ToggleButton.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-ToggleButton.BackgroundTransparency = 0.2
+ToggleButton.BackgroundTransparency = 0.12
 ToggleButton.Text = ""
 ToggleButton.AutoButtonColor = false
-
-if GuiService:IsTenFootInterface() then
-	ToggleButton.Visible = false
-end
+ToggleButton.Active = true
+ToggleButton.Selectable = true
+ToggleButton.ZIndex = 100
 
 Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(1, 0)
 
@@ -1781,58 +1811,48 @@ BtnStroke.Transparency = 0.4
 
 local ToggleIcon = Instance.new("ImageLabel", ToggleButton)
 ToggleIcon.BackgroundTransparency = 1
-ToggleIcon.Size = UDim2.new(0, buttonSize - 16, 0, buttonSize - 16)
-ToggleIcon.Position = UDim2.new(0.5, -(buttonSize - 16)/2, 0.5, -(buttonSize - 16)/2)
+ToggleIcon.Size = UDim2.new(0, buttonSize - 12, 0, buttonSize - 12)
+ToggleIcon.Position = UDim2.new(0.5, -(buttonSize - 12)/2, 0.5, -(buttonSize - 12)/2)
 ToggleIcon.Image = "rbxassetid://83217542970502"
+ToggleIcon.Active = false
+ToggleIcon.ZIndex = ToggleButton.ZIndex + 1
 
-local BLabel = Instance.new("TextLabel", ToggleButton)
-BLabel.BackgroundTransparency = 1
-BLabel.Size = UDim2.new(0, 16, 0, 16)
-BLabel.Position = UDim2.new(1, -16, 1, -16)
-BLabel.Font = Enum.Font.GothamBold
-BLabel.Text = "B"
-BLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-BLabel.TextSize = 22
-BLabel.TextXAlignment = Enum.TextXAlignment.Center
-BLabel.TextYAlignment = Enum.TextYAlignment.Center
-BLabel.Visible = UserInputService.KeyboardEnabled
-
-local isVisible = false
+isVisible = false
 MainFrame.Visible = false
 
 task.delay(2.2, function()
-	isVisible = true
-	MainFrame.Visible = true
+    if ToggleGui.Parent then
+        isVisible = true
+        MainFrame.Visible = true
+    end
 end)
 
 task.spawn(function()
-	while true do
-		task.wait(0.1)
-		if getgenv()[sessionKey] ~= mySession then break end
-		if isVisible then
-			local t1 = TweenService:Create(BtnStroke, TweenInfo.new(0.4), {Color = Color3.fromRGB(200, 200, 255), Transparency = 0})
-			t1:Play()
-			t1.Completed:Wait()
-			if getgenv()[sessionKey] ~= mySession or not isVisible then break end
-			local t2 = TweenService:Create(BtnStroke, TweenInfo.new(0.4), {Color = Color3.fromRGB(80, 80, 90), Transparency = 0.4})
-			t2:Play()
-			t2.Completed:Wait()
-		else
-			task.wait(0.2)
-		end
-	end
+    while ToggleGui.Parent do
+        task.wait(0.1)
+        if getgenv()[sessionKey] ~= mySession then break end
+        if isVisible then
+            local t1 = TweenService:Create(BtnStroke, TweenInfo.new(0.4), {
+                Color = Color3.fromRGB(200, 200, 255), Transparency = 0
+            })
+            t1:Play()
+            t1.Completed:Wait()
+            if getgenv()[sessionKey] ~= mySession or not isVisible then break end
+            local t2 = TweenService:Create(BtnStroke, TweenInfo.new(0.4), {
+                Color = Color3.fromRGB(80, 80, 90), Transparency = 0.4
+            })
+            t2:Play()
+            t2.Completed:Wait()
+        else
+            task.wait(0.2)
+        end
+    end
 end)
 
 local function toggleMenu()
-	isVisible = not isVisible
-	MainFrame.Visible = isVisible
+    isVisible = not isVisible
+    MainFrame.Visible = isVisible
 end
 
-ToggleButton.MouseButton1Click:Connect(toggleMenu)
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.B then
-		toggleMenu()
-	end
-end)
+-- Click/tap the HEXY icon below Delta to open or close the menu.
+ToggleButton.Activated:Connect(toggleMenu)
