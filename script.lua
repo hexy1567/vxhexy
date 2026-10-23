@@ -178,6 +178,7 @@ local noclipEnabled = false
 local noclipConnection = nil
 local stabilizeConnection = nil
 local antiAfkConnection = nil
+local antiFlingConnection = nil
 
 -- // Tema Değişkenleri
 local theme = {
@@ -431,6 +432,71 @@ local function stopStabilization()
 	end
 	unStabilizeCharacter()
 end
+
+
+-- ============================================================
+-- AUTO ANTI-FLING (automatic; no GUI toggle)
+-- Conservative velocity guard designed not to interfere with farm tweens.
+-- It only reacts to extreme, abnormal physics velocities and never anchors
+-- or teleports the character, so normal coin movement remains untouched.
+-- ============================================================
+local ANTI_FLING_LINEAR_LIMIT = 100
+local ANTI_FLING_ANGULAR_LIMIT = 125
+
+local function startAutoAntiFling()
+	if antiFlingConnection then return end
+	local lastCheck = 0
+
+	antiFlingConnection = RunService.Heartbeat:Connect(function()
+		if getgenv()[sessionKey] ~= mySession then
+			if antiFlingConnection then
+				antiFlingConnection:Disconnect()
+				antiFlingConnection = nil
+			end
+			return
+		end
+
+		local now = os.clock()
+		if now - lastCheck < 0.08 then return end
+		lastCheck = now
+
+		local char = LocalPlayer.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not root or not hum or hum.Health <= 0 or root.Anchored then return end
+		if safeUndergroundActive then return end
+
+		local linear = root.AssemblyLinearVelocity
+		local angular = root.AssemblyAngularVelocity
+		if linear.Magnitude > ANTI_FLING_LINEAR_LIMIT or angular.Magnitude > ANTI_FLING_ANGULAR_LIMIT then
+			-- Cancel only the abnormal physics impulse. Do not set CFrame/Anchored,
+			-- which could fight tweenTo() while AutoFarm is collecting coins.
+			pcall(function()
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.AssemblyAngularVelocity = Vector3.zero
+				root.Velocity = Vector3.zero
+				root.RotVelocity = Vector3.zero
+			end)
+			-- Clear only other body parts whose physics values also exceed the
+			-- fling thresholds; normal movement stays unchanged.
+			for _, part in ipairs(char:GetDescendants()) do
+				if part:IsA("BasePart") and not part.Anchored then
+					pcall(function()
+						if part.AssemblyLinearVelocity.Magnitude > ANTI_FLING_LINEAR_LIMIT then
+							part.AssemblyLinearVelocity = Vector3.zero
+						end
+						if part.AssemblyAngularVelocity.Magnitude > ANTI_FLING_ANGULAR_LIMIT then
+							part.AssemblyAngularVelocity = Vector3.zero
+						end
+					end)
+				end
+			end
+		end
+	end)
+end
+
+-- Starts automatically as soon as the script loads; no button or toggle required.
+startAutoAntiFling()
 
 -- ============================================================
 -- AÇILIŞ ANİMASYONU — TÜM EKRANI KAPSAR
@@ -1753,7 +1819,7 @@ task.spawn(function()
 				if coin then
 					-- Aim a little farther below the coin center.
 					-- Keep the offset modest because too much separation can prevent touch registration.
-					local coinTarget = coin.Position - Vector3.new(0, 2.25, 0)
+					local coinTarget = coin.Position - Vector3.new(0, 3.0, 0)
 					if tweenTo(hrp, coinTarget) then
 						if firetouchinterest then
 							pcall(function() firetouchinterest(hrp, coin, 0) end)
