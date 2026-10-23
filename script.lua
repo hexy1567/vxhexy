@@ -148,6 +148,10 @@ local roundActive = false
 local safeUndergroundActive = false
 local safeUndergroundTarget = nil
 local safeMoveToken = 0
+local countdownUntil = 0
+local ROUND_COUNTDOWN_SECONDS = 7
+local MAX_COIN_HORIZONTAL_DISTANCE = 300
+local MAX_COIN_VERTICAL_DISTANCE = 90
 local lastLobbyPosition = nil
 local autoSaveEnabled = true
 local savedToggleStates = {}
@@ -430,6 +434,38 @@ local function stopStabilization()
 		stabilizeConnection = nil
 	end
 	unStabilizeCharacter()
+end
+
+
+-- Leave the AFK hiding position only when the countdown has elapsed.
+local function startFarmFromSafeSpot()
+	if not roundActive or not autoFarmEnabled or isDead or bag_full or not start_position then return false end
+	safeUndergroundActive = false
+	safeUndergroundTarget = nil
+	local hrp = getHRP()
+	if hrp then
+		hrp.Anchored = false
+		hrp.CFrame = start_position
+		zeroCharacterVelocity(hrp, LocalPlayer.Character)
+	end
+	restoreCharacterCollisions()
+	farming = true
+	unStabilizeCharacter()
+	if not noclipEnabled then stopStabilization() end
+	return true
+end
+
+local function scheduleFarmAfterCountdown(expectedToken)
+	task.spawn(function()
+		while os.clock() < countdownUntil do
+			if getgenv()[sessionKey] ~= mySession or expectedToken ~= safeMoveToken
+				or not roundActive or isDead or not autoFarmEnabled then return end
+			task.wait(0.05)
+		end
+		if getgenv()[sessionKey] ~= mySession or expectedToken ~= safeMoveToken
+			or not roundActive or isDead or not autoFarmEnabled then return end
+		startFarmFromSafeSpot()
+	end)
 end
 
 -- ============================================================
@@ -966,57 +1002,70 @@ end
 -- ============================================================
 createToggle(MainContent, "AutoFarm", L("autoFarm"), function(state)
 	autoFarmEnabled = state
-	if state then
-		-- In the lobby, only remember the user's preference; do not move the character.
-		if not roundActive or not start_position then
-			-- Remember the toggle, but do not move until RoundStart has verified the real map spawn.
-			farming = false
-			if not noclipEnabled and not safeUndergroundActive then
-				stopStabilization()
-			end
-			saveSettings()
-			return
-		end
-		-- Leave the AFK hiding spot and return to the verified map spawn before farming.
-		if safeUndergroundActive then
-			local hrp = getHRP()
-			if hrp then
-				hrp.Anchored = false
-				if start_position then hrp.CFrame = start_position end
-			end
-			safeUndergroundActive = false
-			safeUndergroundTarget = nil
-			restoreCharacterCollisions()
-		end
-		farming = roundActive and not isDead and not bag_full
-		if farming then unStabilizeCharacter() end
-		if not noclipEnabled then stopStabilization() end
-	else
+	savedToggleStates.AutoFarm = state
+	saveSettings()
+
+	if not state then
+		safeMoveToken += 1 -- cancel a pending countdown-to-farm task
 		farming = false
-		-- Only use the underground AFK spot when Underground Mode is enabled.
 		if roundActive and undergroundMode and not isDead and start_position then
 			safeUndergroundTarget = start_position + Vector3.new(0, -28, 0)
 			safeUndergroundActive = true
 			local hrp = getHRP()
-			local char = LocalPlayer.Character
 			if hrp then
-				disableCharacterCollisions(char)
-				hrp.CFrame = safeUndergroundTarget
+				disableCharacterCollisions(LocalPlayer.Character)
 				hrp.Anchored = true
-				zeroCharacterVelocity(hrp, char)
+				hrp.CFrame = safeUndergroundTarget
+				zeroCharacterVelocity(hrp, LocalPlayer.Character)
 			end
 			startStabilization()
 		elseif not noclipEnabled and not safeUndergroundActive then
 			stopStabilization()
 		end
+		return
+	end
+
+	-- In the lobby, remember the setting only. Never move until a verified round spawn exists.
+	if not roundActive or not start_position or isDead or bag_full then
+		farming = false
+		return
+	end
+
+	if undergroundMode and os.clock() < countdownUntil then
+		-- Stay hidden until the visible round countdown ends.
+		if not safeUndergroundActive then
+			safeUndergroundTarget = start_position + Vector3.new(0, -28, 0)
+			safeUndergroundActive = true
+			local hrp = getHRP()
+			if hrp then
+				disableCharacterCollisions(LocalPlayer.Character)
+				hrp.Anchored = true
+				hrp.CFrame = safeUndergroundTarget
+				zeroCharacterVelocity(hrp, LocalPlayer.Character)
+			end
+			startStabilization()
+		end
+		farming = false
+		scheduleFarmAfterCountdown(safeMoveToken)
+		return
+	end
+
+	if safeUndergroundActive then
+		startFarmFromSafeSpot()
+	else
+		farming = true
+		unStabilizeCharacter()
+		if not noclipEnabled then stopStabilization() end
 	end
 end)
 
 createToggle(MainContent, "Underground", L("underground"), function(state)
 	undergroundMode = state
+	savedToggleStates.Underground = state
 	saveSettings()
-	if not roundActive or isDead then return end
-	if state and not autoFarmEnabled and start_position then
+	if not roundActive or isDead or not start_position then return end
+
+	if state and not autoFarmEnabled then
 		safeMoveToken += 1
 		safeUndergroundTarget = start_position + Vector3.new(0, -28, 0)
 		safeUndergroundActive = true
@@ -1024,8 +1073,8 @@ createToggle(MainContent, "Underground", L("underground"), function(state)
 		local hrp = getHRP()
 		if hrp then
 			disableCharacterCollisions(LocalPlayer.Character)
-			hrp.CFrame = safeUndergroundTarget
 			hrp.Anchored = true
+			hrp.CFrame = safeUndergroundTarget
 			zeroCharacterVelocity(hrp, LocalPlayer.Character)
 		end
 		startStabilization()
@@ -1039,7 +1088,17 @@ createToggle(MainContent, "Underground", L("underground"), function(state)
 			if start_position then hrp.CFrame = start_position end
 		end
 		restoreCharacterCollisions()
-		if not noclipEnabled then stopStabilization() end
+		if autoFarmEnabled then
+			if os.clock() < countdownUntil then
+				farming = false
+				scheduleFarmAfterCountdown(safeMoveToken)
+			else
+				farming = true
+				unStabilizeCharacter()
+			end
+		elseif not noclipEnabled then
+			stopStabilization()
+		end
 	end
 end)
 
@@ -1419,15 +1478,24 @@ local function isCoinValid(coin)
 	return true
 end
 
+local function isWithinActiveMap(pos)
+	if not start_position then return false end
+	local delta = pos - start_position.Position
+	local horizontal = Vector3.new(delta.X, 0, delta.Z).Magnitude
+	return horizontal <= MAX_COIN_HORIZONTAL_DISTANCE
+		and math.abs(delta.Y) <= MAX_COIN_VERTICAL_DISTANCE
+end
+
 local function get_nearest_coin()
 	local hrp = getHRP()
-	if not hrp then return nil, math.huge end
+	if not hrp or not start_position then return nil, math.huge end
 	local closest, dist = nil, math.huge
-	for _, m in pairs(workspace:GetChildren()) do
-		if getgenv()[sessionKey] ~= mySession then return nil, math.huge end
-		if m:FindFirstChild("CoinContainer") then
-			for _, coin in pairs(m.CoinContainer:GetChildren()) do
-				if coin:IsA("BasePart") and isCoinValid(coin) then
+	for _, m in ipairs(Workspace:GetChildren()) do
+		if getgenv()[sessionKey] ~= mySession or not roundActive then return nil, math.huge end
+		local container = m:FindFirstChild("CoinContainer")
+		if container then
+			for _, coin in ipairs(container:GetChildren()) do
+				if coin:IsA("BasePart") and isCoinValid(coin) and isWithinActiveMap(coin.Position) then
 					local d = (hrp.Position - coin.Position).Magnitude
 					if d < dist then
 						closest, dist = coin, d
@@ -1496,54 +1564,57 @@ local function beginRound()
 	isDead = false
 	bag_full = false
 	farming = false
+	start_position = nil -- never reuse a previous round's spawn
 	safeUndergroundActive = false
 	safeUndergroundTarget = nil
+	countdownUntil = 0
 	collectedCoins = {}
 
 	task.spawn(function()
-		-- RoundStart can arrive before the server teleports the character.
-		-- Wait for a real position change; never guess and teleport from the lobby.
+		-- Verify the server's real map teleport before changing the character's position.
 		local deadline = os.clock() + 12
 		local spawnCFrame = nil
 		while os.clock() < deadline do
 			if getgenv()[sessionKey] ~= mySession or thisRoundToken ~= safeMoveToken or not roundActive or isDead then return end
 			local root = getHRP()
 			if root and root.Parent and baseline and (root.Position - baseline).Magnitude >= 12 then
-				task.wait(0.25) -- let the server finish the map spawn/teleport
+				task.wait(0.2)
 				root = getHRP()
 				if root and root.Parent and (root.Position - baseline).Magnitude >= 12 then
 					spawnCFrame = root.CFrame
 					break
 				end
 			end
-			task.wait(0.1)
+			task.wait(0.05)
 		end
 
 		if getgenv()[sessionKey] ~= mySession or thisRoundToken ~= safeMoveToken or not roundActive or isDead then return end
 		if not spawnCFrame then
-			-- Safe failure: don't send the character below an unverified (possibly lobby) position.
-			warn("HEXY: Round spawn was not verified; skipped underground teleport.")
-			safeUndergroundActive = false
+			warn("HEXY: Could not verify map spawn; movement disabled to avoid sending the character outside the map.")
 			farming = false
+			safeUndergroundActive = false
 			if not noclipEnabled then stopStabilization() end
 			return
 		end
 
 		start_position = spawnCFrame
 		local root = getHRP()
-		if undergroundMode and not autoFarmEnabled then
-			-- Underground Mode is for AFK waiting only. Farming starts at the real map spawn.
+		if undergroundMode then
+			-- Start the hide countdown regardless of whether AutoFarm is already enabled.
+			countdownUntil = os.clock() + ROUND_COUNTDOWN_SECONDS
 			safeUndergroundActive = true
 			safeUndergroundTarget = spawnCFrame + Vector3.new(0, -28, 0)
-			local target = safeUndergroundTarget
+			farming = false
 			if root then
 				disableCharacterCollisions(LocalPlayer.Character)
-				root.CFrame = target
 				root.Anchored = true
+				root.CFrame = safeUndergroundTarget
 				zeroCharacterVelocity(root, LocalPlayer.Character)
 			end
 			startStabilization()
+			if autoFarmEnabled then scheduleFarmAfterCountdown(thisRoundToken) end
 		else
+			countdownUntil = os.clock()
 			safeUndergroundActive = false
 			safeUndergroundTarget = nil
 			restoreCharacterCollisions()
@@ -1571,6 +1642,7 @@ RoundEnd.OnClientEvent:Connect(function()
 	safeMoveToken += 1
 	roundActive = false
 	farming = false
+	countdownUntil = 0
 	safeUndergroundActive = false
 	local hrp = getHRP()
 	if hrp then hrp.Anchored = false end
@@ -1687,6 +1759,7 @@ end)
 
 local function tweenTo(hrp, targetPos)
 	if getgenv()[sessionKey] ~= mySession or not hrp or not hrp.Parent or bag_full or not roundActive or not start_position then return false end
+	if not isWithinActiveMap(targetPos) then return false end
 	
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
@@ -1724,9 +1797,11 @@ task.spawn(function()
 			if hrp and hrp.Parent then
 				local coin, dist = get_nearest_coin()
 				if coin then
-					-- Always travel to the actual coin position. Underground Mode only controls
-					-- AFK hiding, not an offset below each coin (which misses touch collection).
-					if tweenTo(hrp, coin.Position) then
+					-- Underground mode uses a small downward offset at each coin; the active-map
+					-- guard above rejects stale containers and off-map targets.
+					local targetPos = coin.Position
+					if undergroundMode then targetPos = targetPos - Vector3.new(0, 3.5, 0) end
+					if tweenTo(hrp, targetPos) then
 						if firetouchinterest then
 							pcall(function() firetouchinterest(hrp, coin, 0) end)
 							task.wait(0.05)
