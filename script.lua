@@ -19,7 +19,7 @@ local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
 
 -- // Eski GUI Temizliği
-for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui", "HexyMM2_UI", "VoidIntroGui"}) do
+for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui", "HexyMM2_UI", "HexyIntroGui"}) do
 	local old = CoreGui:FindFirstChild(name)
 	if old then old:Destroy() end
 end
