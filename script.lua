@@ -1353,7 +1353,7 @@ end)
 -- OYUN MEKANİKLERİ & FARM MANTIĞI
 -- ============================================================
 local collectedCoins = {}
-local COIN_COOLDOWN = 3
+local COIN_COOLDOWN = 0.9
 
 local function isCoinValid(coin)
 	if getgenv()[sessionKey] ~= mySession then return false end
@@ -1659,6 +1659,19 @@ end
 -- ============================================================
 -- FARM DÖNGÜSÜ
 -- ============================================================
+local function tryTouchCoin(hrp, coin)
+	if not hrp or not hrp.Parent or not coin or not coin.Parent then return end
+	-- Prefer an actual character-to-coin touch. Never move the coin itself;
+	-- changing coin.CFrame locally does not reliably collect it on the server.
+	if type(firetouchinterest) == "function" then
+		pcall(function()
+			firetouchinterest(hrp, coin, 0)
+			task.wait(0.04)
+			firetouchinterest(hrp, coin, 1)
+		end)
+	end
+end
+
 task.spawn(function()
 	while true do
 		task.wait(0.03)
@@ -1666,31 +1679,23 @@ task.spawn(function()
 		if autoFarmEnabled and farming and not bag_full and not isDead and roundActive then
 			local hrp = getHRP()
 			if hrp and hrp.Parent then
-				local coin, dist = get_nearest_coin()
-				if coin then
-					if undergroundMode then
-						local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - 3.5, coin.Position.Z)
-						tweenTo(hrp, targetPos)
-						
-						if firetouchinterest then
-							firetouchinterest(hrp, coin, 0)
-							firetouchinterest(hrp, coin, 1)
-						else
-							coin.CFrame = hrp.CFrame
-						end
-						
-						if isCoinValid(coin) and roundActive then
+				local coin = get_nearest_coin()
+				if coin and coin.Parent then
+					-- While collecting, go to the coin's actual position. The old
+					-- underground branch aimed 3.5 studs below every coin, making the
+					-- character sink between levels without touching the coins.
+					local reached = tweenTo(hrp, coin.Position)
+					if reached and coin.Parent and roundActive and not bag_full then
+						tryTouchCoin(hrp, coin)
+						task.wait(0.12)
+						-- Cool down briefly to avoid getting stuck on one uncollected
+						-- coin; if the server did not collect it, it becomes eligible again.
+						if coin and coin.Parent then
 							collectedCoins[coin] = tick()
-						end
-					else
-						if tweenTo(hrp, coin.Position) then
-							if isCoinValid(coin) and roundActive then
-								collectedCoins[coin] = tick()
-							end
 						end
 					end
 				else
-					task.wait(0.2)
+					task.wait(0.12)
 				end
 			end
 		end
