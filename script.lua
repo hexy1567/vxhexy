@@ -926,6 +926,15 @@ end
 createToggle(MainContent, "AutoFarm", L("autoFarm"), function(state)
 	autoFarmEnabled = state
 	if state then
+		-- In the lobby, only remember the user's preference; do not move the character.
+		if not roundActive then
+			farming = false
+			if not noclipEnabled and not safeUndergroundActive then
+				stopStabilization()
+			end
+			saveSettings()
+			return
+		end
 		-- AFK güvenli konumundan çıkar ve farmı başlat.
 		if safeUndergroundActive then
 			local hrp = getHRP()
@@ -1484,17 +1493,11 @@ local function beginRound()
 	enterSafeUnderground()
 end
 
+-- Only the authoritative RoundStart event begins a round.
+-- Do not infer a round from CoinContainer: MM2 can create map/coin objects
+-- before the actual round begins, which would incorrectly move the player
+-- outside the map while still in the lobby.
 RoundStart.OnClientEvent:Connect(beginRound)
-
--- Fallback in case RoundStart fires before this script connects or is missed.
-task.spawn(function()
-	while task.wait(0.25) do
-		if getgenv()[sessionKey] ~= mySession then break end
-		if not roundActive and hasRoundCoinContainer() then
-			beginRound()
-		end
-	end
-end)
 
 RoundEnd.OnClientEvent:Connect(function()
 	if getgenv()[sessionKey] ~= mySession then return end
