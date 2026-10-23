@@ -1088,7 +1088,7 @@ createToggle(MainContent, "AutoFarm", L("autoFarm"), function(state)
 		farming = false
 		-- Only use the underground AFK spot when Underground Mode is enabled.
 		if roundActive and undergroundMode and not isDead and start_position then
-			safeUndergroundTarget = start_position + Vector3.new(0, -28, 0)
+			safeUndergroundTarget = start_position + Vector3.new(0, -31, 0)
 			safeUndergroundActive = true
 			local hrp = getHRP()
 			local char = LocalPlayer.Character
@@ -1111,7 +1111,7 @@ createToggle(MainContent, "Underground", L("underground"), function(state)
 	if not roundActive or isDead then return end
 	if state and not autoFarmEnabled and start_position then
 		safeMoveToken += 1
-		safeUndergroundTarget = start_position + Vector3.new(0, -28, 0)
+		safeUndergroundTarget = start_position + Vector3.new(0, -31, 0)
 		safeUndergroundActive = true
 		farming = false
 		local hrp = getHRP()
@@ -1627,7 +1627,7 @@ local function beginRound()
 		if undergroundMode and not autoFarmEnabled then
 			-- Underground Mode is for AFK waiting only. Farming starts at the real map spawn.
 			safeUndergroundActive = true
-			safeUndergroundTarget = spawnCFrame + Vector3.new(0, -28, 0)
+			safeUndergroundTarget = spawnCFrame + Vector3.new(0, -31, 0)
 			local target = safeUndergroundTarget
 			if root then
 				disableCharacterCollisions(LocalPlayer.Character)
@@ -1701,7 +1701,7 @@ LocalPlayer.CharacterAdded:Connect(function(newChar)
 			if not root then return end
 			start_position = root.CFrame
 			if undergroundMode and not autoFarmEnabled then
-				safeUndergroundTarget = start_position + Vector3.new(0, -28, 0)
+				safeUndergroundTarget = start_position + Vector3.new(0, -31, 0)
 				safeUndergroundActive = true
 				disableCharacterCollisions(LocalPlayer.Character)
 				root.CFrame = safeUndergroundTarget
