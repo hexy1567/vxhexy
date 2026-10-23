@@ -1751,9 +1751,9 @@ task.spawn(function()
 			if hrp and hrp.Parent then
 				local coin, dist = get_nearest_coin()
 				if coin then
-					-- Aim slightly below the coin's center to keep the contact point lower.
-					-- This is a small offset; large offsets can prevent coin touch registration.
-					local coinTarget = coin.Position - Vector3.new(0, 1.5, 0)
+					-- Aim a little farther below the coin center.
+					-- Keep the offset modest because too much separation can prevent touch registration.
+					local coinTarget = coin.Position - Vector3.new(0, 2.25, 0)
 					if tweenTo(hrp, coinTarget) then
 						if firetouchinterest then
 							pcall(function() firetouchinterest(hrp, coin, 0) end)
