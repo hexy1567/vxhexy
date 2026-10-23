@@ -119,10 +119,10 @@ local farming = false
 local bag_full = false
 local isDead = false
 local roundActive = false
-local safeUndergroundActive = false
 local start_position
 local farmSpeed = 20
 local autoResetEnabled = false
 local resetting = false
 local undergroundMode = false
 local noclipEnabled = false
+local noclipConnection = nil
