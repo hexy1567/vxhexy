@@ -3,8 +3,13 @@ if not game:IsLoaded() then
 end
 
 -- // Benzersiz Oturum
-getgenv().MM2FarmSession = tick()
-local mySession = getgenv().MM2FarmSession
+local environment = _G
+if type(getgenv) == "function" then
+    local ok, result = pcall(getgenv)
+    if ok and type(result) == "table" then environment = result end
+end
+environment.MM2FarmSession = tick()
+local mySession = environment.MM2FarmSession
 
 -- // Servisler
 local CoreGui = game:GetService("CoreGui")
@@ -18,6 +23,18 @@ local LocalizationService = game:GetService("LocalizationService")
 local GuiService = game:GetService("GuiService")
 local HttpService = game:GetService("HttpService")
 local Workspace = game:GetService("Workspace")
+
+-- // GUI kökü: Executor destekliyorsa gethui, değilse PlayerGui/CoreGui kullan.
+local GuiRoot = nil
+if type(gethui) == "function" then
+    local ok, root = pcall(gethui)
+    if ok and root then GuiRoot = root end
+end
+if not GuiRoot then
+    local ok, playerGui = pcall(function() return LocalPlayer:WaitForChild("PlayerGui", 5) end)
+    if ok and playerGui then GuiRoot = playerGui end
+end
+if not GuiRoot then GuiRoot = CoreGui end
 
 -- // HEXY AutoSave: ayarlar executor destekliyorsa dosyaya kaydedilir.
 local CONFIG_FILE = "HEXY_MM2_Settings.json"
@@ -36,15 +53,56 @@ local function saveSettings()
 end
 
 -- // Eski GUI Temizliği
-for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui"}) do
-	local old = CoreGui:FindFirstChild(name)
-	if old then old:Destroy() end
+for _, root in ipairs({GuiRoot, CoreGui}) do
+    for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui"}) do
+        local old = root and root:FindFirstChild(name)
+        if old then pcall(function() old:Destroy() end) end
+    end
+end
+local playerGuiForCleanup = LocalPlayer:FindFirstChild("PlayerGui")
+if playerGuiForCleanup then
+    local old = playerGuiForCleanup:FindFirstChild("CustomUI")
+    if old then old:Destroy() end
 end
 
-if LocalPlayer:FindFirstChild("PlayerGui") then
-	local old = LocalPlayer.PlayerGui:FindFirstChild("CustomUI")
-	if old then old:Destroy() end
+-- Erken başlatılan GUI: kodun ilerleyen bölümlerinde hata olsa bile H düğmesi oluşur.
+local MainFrame = nil
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MM2FarmUI"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.DisplayOrder = 10000
+local guiParentOk = pcall(function() ScreenGui.Parent = GuiRoot end)
+if not guiParentOk then
+    ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 end
+
+local ToggleButton = Instance.new("TextButton")
+ToggleButton.Name = "HEXY_MenuToggle"
+ToggleButton.Parent = ScreenGui
+ToggleButton.Size = UDim2.fromOffset(48, 48)
+ToggleButton.Position = UDim2.new(0, 16, 0.5, -24)
+ToggleButton.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+ToggleButton.BackgroundTransparency = 0.08
+ToggleButton.BorderSizePixel = 0
+ToggleButton.Text = "H"
+ToggleButton.TextColor3 = Color3.fromRGB(70, 200, 100)
+ToggleButton.Font = Enum.Font.GothamBlack
+ToggleButton.TextSize = 21
+ToggleButton.AutoButtonColor = true
+ToggleButton.ZIndex = 5000
+Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(1, 0)
+local ToggleStroke = Instance.new("UIStroke", ToggleButton)
+ToggleStroke.Color = Color3.fromRGB(80, 80, 90)
+ToggleStroke.Thickness = 1.5
+ToggleButton.Activated:Connect(function()
+    if MainFrame and MainFrame.Parent then
+        MainFrame.Visible = not MainFrame.Visible
+    else
+        ToggleButton.Text = "..."
+    end
+end)
 
 -- // Dil Algılama
 local currentLang = "EN"
@@ -68,61 +126,3 @@ local translations = {
 		noclip = "Noclip",
 		webhookPlaceholder = "Discord Webhook URL",
 		webhookTimer = "Webhook: ",
-		coin = "Coin: ",
-		time = "Süre: ",
-		langStatus = "Dil: Türkçe",
-		themeTitle = "Tema Ayarları",
-		bgColor = "Arka Plan Rengi",
-		borderColor = "Kenarlık Rengi",
-		accentColor = "Vurgu Rengi",
-		transparency = "Şeffaflık",
-		presets = "Hazır Temalar",
-		presetDark = "Koyu",
-		presetPurple = "Mor",
-		presetRed = "Kırmızı",
-		presetBlue = "Mavi",
-		presetGreen = "Yeşil",
-		presetPink = "Pembe"
-	},
-	EN = {
-		title = "HEXY | MM2 Farm",
-		mainTab = "Farm",
-		miscTab = "Settings",
-		themeTab = "Theme",
-		autoFarm = "Auto Coin Farm",
-		speed = "Farm Speed",
-		warning = "25+ = Kick Risk",
-		autoReset = "Auto Reset (Bag Full)",
-		underground = "Underground Mode",
-		antiAfk = "Anti-AFK",
-		noclip = "Noclip",
-		webhookPlaceholder = "Discord Webhook URL",
-		webhookTimer = "Webhook: ",
-		coin = "Coins: ",
-		time = "Time: ",
-		langStatus = "Lang: English",
-		themeTitle = "Theme Settings",
-		bgColor = "Background Color",
-		borderColor = "Border Color",
-		accentColor = "Accent Color",
-		transparency = "Transparency",
-		presets = "Presets",
-		presetDark = "Dark",
-		presetPurple = "Purple",
-		presetRed = "Red",
-		presetBlue = "Blue",
-		presetGreen = "Green",
-		presetPink = "Pink"
-	}
-}
-
-local function L(key)
-	return translations[currentLang][key] or key
-end
-
--- // İstatistik & Webhook
-local totalCoins = 0
-local startTime = os.time()
-local webhookURL = tostring(savedSettings.webhookURL or "")
-local lastWebhook = os.time()
-local webhookCooldown = 150
