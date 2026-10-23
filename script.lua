@@ -1,142 +1,128 @@
-	while tween.PlaybackState == Enum.PlaybackState.Playing do
-		if getgenv().MM2FarmSession ~= mySession or not roundActive or not hrp or not hrp.Parent or bag_full then
-			tween:Cancel()
-			return false
-		end
-		hrp.AssemblyLinearVelocity = Vector3.zero
-		hrp.AssemblyAngularVelocity = Vector3.zero
-		task.wait()
-	end
-	return true
+if not game:IsLoaded() then
+	game.Loaded:Wait()
 end
 
--- ============================================================
--- FARM DÖNGÜSÜ
--- ============================================================
-task.spawn(function()
-	while true do
-		task.wait(0.03)
-		if getgenv().MM2FarmSession ~= mySession then break end
-		if autoFarmEnabled and farming and not bag_full and not isDead and roundActive then
-			local hrp = getHRP()
-			if hrp and hrp.Parent then
-				local coin, dist = get_nearest_coin()
-				if coin then
-					if undergroundMode then
-						local targetPos = Vector3.new(coin.Position.X, coin.Position.Y - 3.5, coin.Position.Z)
-						tweenTo(hrp, targetPos)
-						
-						if firetouchinterest then
-							firetouchinterest(hrp, coin, 0)
-							firetouchinterest(hrp, coin, 1)
-						else
-							coin.CFrame = hrp.CFrame
-						end
-						
-						if isCoinValid(coin) and roundActive then
-							collectedCoins[coin] = tick()
-						end
-					else
-						if tweenTo(hrp, coin.Position) then
-							if isCoinValid(coin) and roundActive then
-								collectedCoins[coin] = tick()
-							end
-						end
-					end
-				else
-					task.wait(0.2)
-				end
-			end
-		end
-	end
-end)
+-- // Benzersiz Oturum
+getgenv().MM2FarmSession = tick()
+local mySession = getgenv().MM2FarmSession
 
--- ============================================================
--- OYUN TOPBAR BUTONU
--- ============================================================
-local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-local gameTopbar = playerGui:WaitForChild("GameTopbar")
-local container = gameTopbar:WaitForChild("Container")
+-- // Servisler
+local CoreGui = game:GetService("CoreGui")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local LocalizationService = game:GetService("LocalizationService")
+local GuiService = game:GetService("GuiService")
+local HttpService = game:GetService("HttpService")
+local Workspace = game:GetService("Workspace")
 
-if container:FindFirstChild("MenuToggleButton") then
-	container.MenuToggleButton:Destroy()
+-- // HEXY AutoSave: ayarlar executor destekliyorsa dosyaya kaydedilir.
+local CONFIG_FILE = "HEXY_MM2_Settings.json"
+local savedSettings = {}
+if readfile and isfile then
+    pcall(function()
+        if isfile(CONFIG_FILE) then
+            savedSettings = HttpService:JSONDecode(readfile(CONFIG_FILE)) or {}
+        end
+    end)
+end
+local function saveSettings()
+    if writefile then
+        pcall(function() writefile(CONFIG_FILE, HttpService:JSONEncode(savedSettings)) end)
+    end
 end
 
-local buttonSize = 45
-local ToggleButton = Instance.new("TextButton")
-ToggleButton.Name = "MenuToggleButton"
-ToggleButton.Parent = container
-ToggleButton.Size = UDim2.new(0, buttonSize, 0, buttonSize)
-ToggleButton.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-ToggleButton.BackgroundTransparency = 0.2
-ToggleButton.Text = ""
-ToggleButton.AutoButtonColor = false
-
-if GuiService:IsTenFootInterface() then
-	ToggleButton.Visible = false
+-- // Eski GUI Temizliği
+for _, name in ipairs({"MM2FarmUI", "HexyMM2_UI", "HexyIntroGui"}) do
+	local old = CoreGui:FindFirstChild(name)
+	if old then old:Destroy() end
 end
 
-Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(1, 0)
-
-local BtnStroke = Instance.new("UIStroke", ToggleButton)
-BtnStroke.Color = Color3.fromRGB(80, 80, 90)
-BtnStroke.Thickness = 1.5
-BtnStroke.Transparency = 0.4
-
-local ToggleIcon = Instance.new("ImageLabel", ToggleButton)
-ToggleIcon.BackgroundTransparency = 1
-ToggleIcon.Size = UDim2.new(0, buttonSize - 16, 0, buttonSize - 16)
-ToggleIcon.Position = UDim2.new(0.5, -(buttonSize - 16)/2, 0.5, -(buttonSize - 16)/2)
-ToggleIcon.Image = "rbxassetid://83217542970502"
-
-local BLabel = Instance.new("TextLabel", ToggleButton)
-BLabel.BackgroundTransparency = 1
-BLabel.Size = UDim2.new(0, 16, 0, 16)
-BLabel.Position = UDim2.new(1, -16, 1, -16)
-BLabel.Font = Enum.Font.GothamBold
-BLabel.Text = "B"
-BLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-BLabel.TextSize = 22
-BLabel.TextXAlignment = Enum.TextXAlignment.Center
-BLabel.TextYAlignment = Enum.TextYAlignment.Center
-BLabel.Visible = UserInputService.KeyboardEnabled
-
-local isVisible = false
-MainFrame.Visible = false
-
-task.delay(2.2, function()
-	isVisible = true
-	MainFrame.Visible = true
-end)
-
-task.spawn(function()
-	while true do
-		task.wait(0.1)
-		if getgenv().MM2FarmSession ~= mySession then break end
-		if isVisible then
-			local t1 = TweenService:Create(BtnStroke, TweenInfo.new(0.4), {Color = Color3.fromRGB(200, 200, 255), Transparency = 0})
-			t1:Play()
-			t1.Completed:Wait()
-			if getgenv().MM2FarmSession ~= mySession or not isVisible then break end
-			local t2 = TweenService:Create(BtnStroke, TweenInfo.new(0.4), {Color = Color3.fromRGB(80, 80, 90), Transparency = 0.4})
-			t2:Play()
-			t2.Completed:Wait()
-		else
-			task.wait(0.2)
-		end
-	end
-end)
-
-local function toggleMenu()
-	isVisible = not isVisible
-	MainFrame.Visible = isVisible
+if LocalPlayer:FindFirstChild("PlayerGui") then
+	local old = LocalPlayer.PlayerGui:FindFirstChild("CustomUI")
+	if old then old:Destroy() end
 end
 
-ToggleButton.MouseButton1Click:Connect(toggleMenu)
-
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-	if gameProcessed then return end
-	if input.KeyCode == Enum.KeyCode.B then
-		toggleMenu()
-	end
+-- // Dil Algılama
+local currentLang = "EN"
+pcall(function()
+	local loc = LocalPlayer.LocaleId or LocalizationService:GetAbridgedRobloxLocale()
+	if loc and loc:sub(1, 2):upper() == "TR" then currentLang = "TR" end
 end)
+
+local translations = {
+	TR = {
+		title = "HEXY | MM2 Farm",
+		mainTab = "Farm",
+		miscTab = "Ayarlar",
+		themeTab = "Tema",
+		autoFarm = "Oto Coin Farm",
+		speed = "Farm Hızı",
+		warning = "25+ = Atılma Riski",
+		autoReset = "Oto Reset (Çanta Dolunca)",
+		underground = "Yeraltı Modu",
+		antiAfk = "Anti-AFK",
+		noclip = "Noclip",
+		webhookPlaceholder = "Discord Webhook URL",
+		webhookTimer = "Webhook: ",
+		coin = "Coin: ",
+		time = "Süre: ",
+		langStatus = "Dil: Türkçe",
+		themeTitle = "Tema Ayarları",
+		bgColor = "Arka Plan Rengi",
+		borderColor = "Kenarlık Rengi",
+		accentColor = "Vurgu Rengi",
+		transparency = "Şeffaflık",
+		presets = "Hazır Temalar",
+		presetDark = "Koyu",
+		presetPurple = "Mor",
+		presetRed = "Kırmızı",
+		presetBlue = "Mavi",
+		presetGreen = "Yeşil",
+		presetPink = "Pembe"
+	},
+	EN = {
+		title = "HEXY | MM2 Farm",
+		mainTab = "Farm",
+		miscTab = "Settings",
+		themeTab = "Theme",
+		autoFarm = "Auto Coin Farm",
+		speed = "Farm Speed",
+		warning = "25+ = Kick Risk",
+		autoReset = "Auto Reset (Bag Full)",
+		underground = "Underground Mode",
+		antiAfk = "Anti-AFK",
+		noclip = "Noclip",
+		webhookPlaceholder = "Discord Webhook URL",
+		webhookTimer = "Webhook: ",
+		coin = "Coins: ",
+		time = "Time: ",
+		langStatus = "Lang: English",
+		themeTitle = "Theme Settings",
+		bgColor = "Background Color",
+		borderColor = "Border Color",
+		accentColor = "Accent Color",
+		transparency = "Transparency",
+		presets = "Presets",
+		presetDark = "Dark",
+		presetPurple = "Purple",
+		presetRed = "Red",
+		presetBlue = "Blue",
+		presetGreen = "Green",
+		presetPink = "Pink"
+	}
+}
+
+local function L(key)
+	return translations[currentLang][key] or key
+end
+
+-- // İstatistik & Webhook
+local totalCoins = 0
+local startTime = os.time()
+local webhookURL = tostring(savedSettings.webhookURL or "")
+local lastWebhook = os.time()
+local webhookCooldown = 150
